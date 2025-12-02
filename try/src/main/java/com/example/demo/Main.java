@@ -1,8 +1,9 @@
 package com.example.demo;
-import java.util.Base64;
+
 import io.github.bonigarcia.wdm.WebDriverManager;
 import org.apache.pdfbox.multipdf.PDFMergerUtility;
-import org.openqa.selenium.By;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.Pdf;
 import org.openqa.selenium.PrintsPage;
 import org.openqa.selenium.WebDriver;
@@ -10,13 +11,14 @@ import org.openqa.selenium.WebElement;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.print.PrintOptions;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.By;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.Base64;
 
 public class Main {
     public static void main(String[] args) {
@@ -28,128 +30,136 @@ public class Main {
         options.addArguments("--disable-gpu");
 
         WebDriver driver = new ChromeDriver(options);
+        // Spring Boot Handbook URL
         String mainUrl = "https://www.codingshuttle.com/spring-boot-handbook/spring-boot-tutorial-a-comprehensive-guide-for-beginners/";
         List<String> tempPdfFiles = new ArrayList<>();
 
-        // Determine output directory:
-        // Priority: JVM property -DoutputDir=... -> Env var OUTPUT_DIR -> current project directory
-        // 🟢 NEW CODE:
-        String outProp = System.getProperty("outputDir");
-        String outEnv = System.getenv("OUTPUT_DIR");
-        java.nio.file.Path outputDir = (outProp != null && !outProp.isBlank())
-                ? java.nio.file.Path.of(outProp)
-                : (outEnv != null && !outEnv.isBlank() ? java.nio.file.Path.of(outEnv) : java.nio.file.Path.of("D:\\Coddingsutel\\try"));
+        // Output Directory Setup
+        String currentProjectFolder = System.getProperty("user.dir");
+        Path outputDir = Paths.get(currentProjectFolder, "Generated_PDFs");
+
         try {
-            Files.createDirectories(outputDir);
+            if (!Files.exists(outputDir)) {
+                Files.createDirectories(outputDir);
+            }
+            System.out.println("📂 Saving files to: " + outputDir.toAbsolutePath());
         } catch (Exception e) {
-            System.err.println("⚠️ Could not create output directory '" + outputDir.toAbsolutePath() + "'. Falling back to current directory.");
-            outputDir = java.nio.file.Path.of(".");
+            e.printStackTrace();
+            return;
         }
 
         try {
             System.out.println("🚀 Starting the Scraper...");
 
-            // 1. GET ALL LINKS
             driver.get(mainUrl);
-            Thread.sleep(3000); // Wait for load
+            Thread.sleep(3000);
 
-            // Find all links in the handbook
             List<WebElement> links = driver.findElements(By.tagName("a"));
-            Set<String> uniqueUrls = new LinkedHashSet<>(); // Use Set to avoid duplicates
+            Set<String> uniqueUrls = new LinkedHashSet<>();
 
             System.out.println("🔍 Scanning for chapters...");
-            // 1. Normalize the main URL for comparison (remove trailing slash)
             String normalizedMainUrl = mainUrl.endsWith("/") ? mainUrl.substring(0, mainUrl.length() - 1) : mainUrl;
 
             for (WebElement link : links) {
                 String href = link.getAttribute("href");
-
-                // Safety check for null
                 if (href == null) continue;
-
-                // Normalize href for comparison
                 String normalizedHref = href.endsWith("/") ? href.substring(0, href.length() - 1) : href;
 
-                // Filter Logic:
-                // 1. Must belong to the handbook
-                // 2. MUST NOT be the main "Table of Contents" page itself
                 if (normalizedHref.contains("spring-boot-handbook") && !normalizedHref.equals(normalizedMainUrl)) {
                     uniqueUrls.add(href);
                 }
             }
             System.out.println("📋 Found " + uniqueUrls.size() + " chapters.");
 
-            // 2. VISIT EACH LINK & SAVE PDF
-            System.out.println("🗂️  Output folder: " + outputDir.toAbsolutePath());
             int count = 1;
             for (String url : uniqueUrls) {
                 try {
                     System.out.println("Processing [" + count + "/" + uniqueUrls.size() + "]: " + url);
                     driver.get(url);
-                    Thread.sleep(2000); // Wait for render
 
+                    // --- 1. SCROLL TO LOAD IMAGES ---
+                    ((JavascriptExecutor) driver).executeScript("window.scrollTo(0, document.body.scrollHeight)");
+                    Thread.sleep(5000); // Wait for images
+                    ((JavascriptExecutor) driver).executeScript("window.scrollTo(0, 0)");
+                    Thread.sleep(2000);
+
+                    // --- 2. INJECT "PURE BLACK & WHITE" CSS FIXES ---
+                    // --- 👇 NEW: ROBUST DARK MODE FIX 👇 ---
                     ((JavascriptExecutor) driver).executeScript(
-                            "var elements = document.querySelectorAll('nav, aside, footer, .sidebar, .menu, .toc, .table-of-contents');" +
-                                    "for (var i = 0; i < elements.length; i++) {" +
-                                    "    elements[i].style.display = 'none';" +
-                                    "}"
+                            // 1. Toggle Native Dark Mode (Cleaner look)
+                            "document.documentElement.classList.add('dark');" +
+                                    "document.documentElement.classList.remove('light');" +
+
+                                    // 2. Inject Custom CSS to Override Print Settings
+                                    // This forces the PDF engine to respect the dark colors
+                                    "var style = document.createElement('style');" +
+                                    "style.innerHTML = `" +
+                                    "   @media print {" +
+                                    "       body, html {" +
+                                    "           background-color: #000000 !important;" +
+                                    "           -webkit-print-color-adjust: exact !important;" +
+                                    "           print-color-adjust: exact !important;" +
+                                    "       }" +
+                                    "       /* Force all text to be white */" +
+                                    "       h1, h2, h3, p, span, div, li, td, th {" +
+                                    "           color: #ffffff !important;" +
+                                    "       }" +
+                                    "       /* Style Code Blocks (Dark Gray) */" +
+                                    "       pre, code, .hljs {" +
+                                    "           background-color: #1e1e1e !important;" +
+                                    "           color: #ffffff !important;" +
+                                    "           border: 1px solid #333 !important;" +
+                                    "       }" +
+                                    "       /* Hide Sidebar & Nav */" +
+                                    "       nav, aside, footer, .sidebar, .menu, .toc, .table-of-contents {" +
+                                    "           display: none !important;" +
+                                    "       }" +
+                                    "   }" +
+                                    "`;" +
+                                    "document.head.appendChild(style);" +
+
+                                    // 3. Fallback: Manually set styles on screen just in case
+                                    "document.body.style.backgroundColor = '#000000';" +
+                                    "document.body.style.color = '#ffffff';"
                     );
-                    Thread.sleep(500); // Wait for elements to disappear
-
-
+                    Thread.sleep(2000); // Wait for styles to apply
+                    // --- 👆 END OF FIX 👆 ---
                     PrintOptions printOptions = new PrintOptions();
                     printOptions.setBackground(true);
                     printOptions.setShrinkToFit(true);
 
-                    // Print Page
                     Pdf pdf = ((PrintsPage) driver).print(printOptions);
 
-
-                    // 1. Get the last part of the URL (e.g. "java-if-else")
                     String slug = url;
-                    if (slug.endsWith("/")) {
-                        slug = slug.substring(0, slug.length() - 1);
-                    }
+                    if (slug.endsWith("/")) slug = slug.substring(0, slug.length() - 1);
                     int lastSlashIndex = slug.lastIndexOf("/");
-                    if (lastSlashIndex != -1) {
-                        slug = slug.substring(lastSlashIndex + 1);
-                    }
-
+                    if (lastSlashIndex != -1) slug = slug.substring(lastSlashIndex + 1);
 
                     String topicName = slug.replace("-", "_");
-
-                    // 3. Create the new filename: "java_if_else_chapter_1.pdf"
                     String paddedCount = String.format("%02d", count);
                     String filename = outputDir.resolve(paddedCount+ "_"+ topicName + "_chapter_" + count + ".pdf").toString();
 
                     byte[] originalPdfBytes = Base64.getDecoder().decode(pdf.getContent());
-
-                            // Load the PDF into memory to edit it
                     try (PDDocument document = PDDocument.load(originalPdfBytes)) {
                         int totalPages = document.getNumberOfPages();
-
-                        // Check if the PDF has enough pages to remove (must have > 2)
-                        // If it only has 1 or 2 pages, we don't touch it (to avoid deleting the actual content)
                         if (totalPages > 2) {
-                            document.removePage(totalPages - 1); // Remove the very last page
-                            document.removePage(totalPages - 2); // Remove the new last page (originally second-to-last)
-                            System.out.println("   ✂️ Removed last 2 pages from chapter " + count);
+                            document.removePage(totalPages - 1);
+                            document.removePage(totalPages - 2);
+                            System.out.println("   ✂️ Removed last 2 pages.");
                         }
-
-                        // Save the modified PDF to the disk
                         document.save(filename);
                     }
 
                     tempPdfFiles.add(filename);
                     count++;
                 } catch (Exception e) {
-                    System.err.println("⚠️ Error on page: " + url + " => " + e.getMessage());
+                    System.err.println("⚠️ Error on page: " + url);
                 }
             }
 
-            // 3. MERGE ALL PDFs
+            // 3. MERGE
             if (!tempPdfFiles.isEmpty()) {
-                System.out.println("📚 Merging all chapters into 'Full_Spring_Boot_Handbook.pdf'...");
+                System.out.println("📚 Merging " + tempPdfFiles.size() + " chapters...");
                 PDFMergerUtility merger = new PDFMergerUtility();
                 String destPath = outputDir.resolve("Full_Spring_Boot_Handbook.pdf").toString();
                 merger.setDestinationFileName(destPath);
@@ -159,16 +169,15 @@ public class Main {
                 }
 
                 merger.mergeDocuments(null);
-                System.out.println("✅ DONE! File created at: " + java.nio.file.Path.of(destPath).toAbsolutePath());
+                System.out.println("✅ SUCCESS! Book saved at: " + destPath);
             } else {
-                System.out.println("No chapter PDFs were generated. Nothing to merge.");
+                System.out.println("❌ No chapters found.");
             }
 
-            // Cleanup temp files
+            // Cleanup
             for (String filePath : tempPdfFiles) {
                 try { new File(filePath).delete(); } catch (Exception ignored) {}
             }
-
 
         } catch (Exception e) {
             e.printStackTrace();
